@@ -1,0 +1,441 @@
+<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8"><title>动点轨迹画板</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<style>
+:root{--bg:#fbfbf8;--pn:#f1f1ec;--fg:#1d2433;--mu:#6c7385;--ln:#dcdcd4;--gr:#e8e8e0;--ac:#1f5eff;--mx:#d92d3a;--mn:#0d9356;--or:#e08a00;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media(prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#15181f;--pn:#1c2029;--fg:#e8eaf0;--mu:#99a1b3;--ln:#323847;--gr:#232834;--ac:#6f9bff;--mx:#ff6b75;--mn:#3fd48f;--or:#ffb43a}}
+:root[data-theme=dark]{--bg:#15181f;--pn:#1c2029;--fg:#e8eaf0;--mu:#99a1b3;--ln:#323847;--gr:#232834;--ac:#6f9bff;--mx:#ff6b75;--mn:#3fd48f;--or:#ffb43a}
+*{box-sizing:border-box}html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 "PingFang SC","Noto Sans SC","Microsoft YaHei",system-ui,sans-serif}
+main{display:flex;flex-direction:column;min-height:100%}
+#st{position:relative;height:46vh;min-height:270px;border-bottom:1px solid var(--ln);touch-action:none}
+canvas{width:100%;height:100%;display:block;cursor:grab}
+#rd{position:absolute;left:12px;top:10px;font:600 15px ui-monospace,Menlo,monospace;pointer-events:none}
+#zb{position:absolute;right:10px;top:10px;display:flex;flex-direction:column;gap:6px}
+#zb button{width:34px;height:34px;padding:0;font-size:18px}
+#pn{background:var(--pn);padding:14px 16px 20px;flex:1}
+textarea{width:100%;font:inherit;color:inherit;background:var(--bg);border:1px solid var(--ln);border-radius:8px;padding:10px;resize:vertical}
+textarea:focus,button:focus-visible,input:focus-visible{outline:2px solid var(--ac);outline-offset:1px}
+button{font:inherit;color:var(--fg);background:var(--bg);border:1px solid var(--ln);border-radius:8px;padding:7px 12px;cursor:pointer}
+button.go{background:var(--ac);border-color:var(--ac);color:#fff;font-weight:600;width:100%;padding:11px;margin-top:8px}
+.ch{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0}.ch button{font-size:13px;padding:5px 10px;color:var(--mu)}
+.ct{display:flex;align-items:center;gap:10px;margin:6px 0 12px}.ct input{flex:1;min-width:0;accent-color:var(--ac)}.ct span{color:var(--mu);font-size:13px}
+#rs{border-top:1px solid var(--ln);padding-top:12px;font-size:14px}
+#rs p{margin:0 0 8px}#rs .k{color:var(--mu)}#rs .e{color:var(--mx)}
+#rs button.x{display:block;width:100%;text-align:left;margin-bottom:6px;font-variant-numeric:tabular-nums}
+.mx{border-left:4px solid var(--mx)!important}.mn{border-left:4px solid var(--mn)!important}
+@media(min-width:860px){main{flex-direction:row;height:100%}#st{flex:1;height:100%;border:0;border-right:1px solid var(--ln)}#pn{flex:0 0 400px;overflow:auto}}
+</style></head><body><main>
+<div id="st"><canvas id="cv"></canvas><div id="rd"></div><div id="zb"><button id="zi" aria-label="放大">＋</button><button id="zo" aria-label="缩小">－</button><button id="zf" aria-label="适应窗口">⌂</button></div></div>
+<div id="pn">
+<textarea id="tx" rows="3" aria-label="运动描述"></textarea>
+<button class="go" id="go">生成并演示</button>
+<div class="ch" id="ch"></div>
+<div class="ct"><button id="pl" aria-label="播放/暂停">⏸</button><input type="range" id="pr" min="0" max="1000" value="0" aria-label="主点位置"><span id="lb2" style="display:none">副点</span><input type="range" id="pr2" min="0" max="1000" value="0" style="display:none;max-width:90px" aria-label="副点位置"><span>速度</span><input type="range" id="sp" min="0.2" max="3" step="0.1" value="1" style="max-width:90px" aria-label="速度"></div>
+<div id="rs"></div>
+</div></main>
+<script>
+const $=i=>document.getElementById(i),cv=$('cv'),g=cv.getContext('2d');
+const FN='asin acos atan sinh cosh tanh sin cos tan sqrt abs ln log exp'.split(' '),FR=/asin|acos|atan|sinh|cosh|tanh|sin|cos|tan|sqrt|abs|exp/g;
+const M=Object.assign(Object.create(Math),{ln:Math.log,log:Math.log10});
+const f3=v=>String(+v.toFixed(3)),esc=s=>String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+const ds=(a,b)=>Math.hypot(a[0]-b[0],a[1]-b[1]);
+// ---- 表达式编译（只允许白名单符号）----
+function C(src,V=[]){
+ const T=[];
+ for(const m of src.toLowerCase().matchAll(/\d+\.?\d*|[a-z]+|[-+*\/^(),]|\S/g)){
+  let w=m[0];
+  if(/[a-z]/.test(w)){while(w){const f=FN.find(f=>w.startsWith(f));
+   if(f){T.push(['f','M.'+f]);w=w.slice(f.length)}
+   else if(w.startsWith('pi')){T.push(['n','Math.PI']);w=w.slice(2)}
+   else if(V.includes(w[0])){T.push(['n',w[0]]);w=w.slice(1)}
+   else if(w[0]=='e'){T.push(['n','Math.E']);w=w.slice(1)}
+   else throw Error('无法识别符号“'+w[0]+'”')}}
+  else if(/\d/.test(w))T.push(['n',w]);
+  else if(/[-+*\/^(),]/.test(w))T.push(['o',w]);
+  else throw Error('无法识别符号“'+w+'”')}
+ let s='',p=['o','('];
+ for(const k of T){const[a,v]=k,[pa,pv]=p;
+  if(pa=='f'&&v!='('){s+='('+v+')';p=['n',')'];continue}
+  if((pa=='n'||pv==')')&&(a=='n'||a=='f'||v=='('))s+='*';
+  if(v=='-'&&pa=='o'&&pv!=')'&&pv!='^'){s+='-1*';p=k;continue}
+  s+=v=='^'?'**':v;p=k}
+ let f;try{f=new Function(...V,'M','return '+s)}catch(e){throw Error('表达式无法解析：'+src)}
+ return(...a)=>f(...a,M)}
+const norm=s=>s.replace(/√/g,'sqrt ').replace(/[²³]/g,m=>m=='²'?'^2':'^3').replace(/[，、]/g,',').replace(/；/g,';').replace(/（/g,'(').replace(/）/g,')').replace(/＝/g,'=').replace(/[－—–]/g,'-').replace(/＋/g,'+').replace(/[×·∙⋅]/g,'*').replace(/÷/g,'/').replace(/[θαφ]/g,'t').replace(/π/g,'pi').replace(/垂直于?/g,'⊥').replace(/\r/g,'');
+const rg=(s,v)=>{const n='([-+]?[\\d.]+(?:pi)?)',m=s.match(new RegExp(n+'\\s*[≤<]=?\\s*'+v+'\\s*[≤<]=?\\s*'+n))||s.match(new RegExp(v+'\\s*∈\\s*[\\[(]\\s*([^,\\])]+),\\s*([^\\])]+)[\\])]'));return m?[C(m[1])(),C(m[2])()]:null};
+// ---- 隐式曲线 F(x,y)=0：行进方块 + 牛顿修正 ----
+function implicit(F,D,N){
+ const h=2*D/N,n1=N+1,v=new Float64Array(n1*n1),I=(i,j)=>i*n1+j;
+ for(let i=0;i<=N;i++)for(let j=0;j<=N;j++)v[I(i,j)]=F(-D+i*h,-D+j*h);
+ const adj=new Map(),P=new Map();
+ const E=(i,j,d)=>{const k=d+i+','+j;if(!P.has(k)){const[a,b]=d=='h'?[[i,j],[i+1,j]]:[[i,j],[i,j+1]],va=v[I(...a)],vb=v[I(...b)],u=va/(va-vb);P.set(k,[-D+(a[0]+(b[0]-a[0])*u)*h,-D+(a[1]+(b[1]-a[1])*u)*h])}return k};
+ const lk=(a,b)=>{(adj.get(a)||adj.set(a,[]).get(a)).push(b);(adj.get(b)||adj.set(b,[]).get(b)).push(a)};
+ for(let i=0;i<N;i++)for(let j=0;j<N;j++){
+  const a=v[I(i,j)]>0,b=v[I(i+1,j)]>0,c=v[I(i+1,j+1)]>0,d=v[I(i,j+1)]>0,r=[];
+  if(a!=b)r.push(E(i,j,'h'));if(b!=c)r.push(E(i+1,j,'v'));if(d!=c)r.push(E(i,j+1,'h'));if(a!=d)r.push(E(i,j,'v'));
+  if(r.length==2)lk(r[0],r[1]);else if(r.length==4){lk(r[0],r[1]);lk(r[2],r[3])}}
+ const seen=new Set(),out=[];
+ const walk=s=>{const l=[];let c=s,p=null;while(c&&!seen.has(c)){seen.add(c);l.push(P.get(c));const n=adj.get(c).find(k=>k!=p&&!seen.has(k));p=c;c=n}return l};
+ for(const[k,n]of adj)if(n.length==1&&!seen.has(k))out.push(walk(k));
+ for(const[k]of adj)if(!seen.has(k)){const l=walk(k);l.push(l[0]);out.push(l)}
+ const pol=p=>proj(F,p);
+ return out.map(l=>l.map(pol)).filter(l=>l.length>2)}
+function proj(F,p){for(let k=0;k<3;k++){const e=1e-6,f=F(p[0],p[1]),gx=(F(p[0]+e,p[1])-F(p[0]-e,p[1]))/2/e,gy=(F(p[0],p[1]+e)-F(p[0],p[1]-e))/2/e,m=gx*gx+gy*gy||1;if(isFinite(f/m))p=[p[0]-f*gx/m,p[1]-f*gy/m]}return p}
+const clip=(L,ok)=>{const o=[];L.forEach(l=>{let c=[];l.forEach(p=>{if(ok(p))c.push(p);else{if(c.length>1)o.push(c);c=[]}});if(c.length>1)o.push(c)});return o};
+function dens(pl,cl){const q=cl?[...pl,pl[0]]:pl;let L=0;for(let i=1;i<q.length;i++)L+=ds(q[i],q[i-1]);const st=L/1500||1,o=[];
+ for(let i=1;i<q.length;i++){const a=q[i-1],b=q[i],n=Math.max(1,Math.ceil(ds(a,b)/st));for(let k=0;k<n;k++)o.push([a[0]+(b[0]-a[0])*k/n,a[1]+(b[1]-a[1])*k/n])}
+ if(!cl)o.push(q[q.length-1]);return o}
+function build(lines,closed){const o=[];let s=0;closed=closed&&lines.length==1;
+ lines.forEach(l=>dens(l,closed).forEach((p,i)=>{if(o.length&&i)s+=ds([p[0],p[1]],[o[o.length-1].x,o[o.length-1].y]);o.push({x:p[0],y:p[1],s,b:i==0})}));
+ const L=s+(closed?ds([o[0].x,o[0].y],[o[o.length-1].x,o[o.length-1].y]):0);return{pts:o,L:L||1,closed}}
+// ---- 文字解析 ----
+function parse(raw){
+ let s=norm(raw),pts={},used=new Set(),m;
+ s=s.replace(/([A-Z])\s*\(\s*([^(),]+?)\s*,\s*([^(),]+?)\s*\)/g,(w,n,a,b)=>{try{pts[n]=[C(a)(),C(b)()];return n}catch(e){return w}});
+ // 多动点检测与主动点选择（先收集，解析派生点后再严格检查）
+ const allMv=[...s.matchAll(/(?:动点|点)\s*([A-Z])|(?:([A-Z])\s*(?:为|是)[^,;。]*动点)/g)].map(k=>k[1]||k[2]).filter((v,i,a)=>v&&a.indexOf(v)===i);
+ let mv=((s.match(/([A-Z])\s*(?:为|是)[^,;。]*动点/)||s.match(/动点\s*([A-Z])/)||s.match(/点\s*([A-Z])\s*(?:在|沿|从|是动点|为动点)/)||[])[1])||allMv[0]||'P';
+ delete pts[mv];
+ let mv2=null;
+ const der=[],dyn=c=>c==mv||c==mv2||der.some(d=>d.n==c),known=c=>dyn(c)||pts[c],need=n=>{if(!known(n))throw Error('缺少点'+n+'的坐标，请写成 '+n+'(x,y) 或用几何关系定义（中点/垂足/对称点）')};
+ // env 支持单点或双点：env(p) 或 env(p1,p2)
+ const env=(p,p2)=>{const e={...pts,[mv]:p};if(mv2&&p2)e[mv2]=p2;der.forEach(d=>e[d.n]=d.f(e));return e};
+ const G=(n,p,p2)=>env(p,p2)[n];
+ const num=(r,d)=>{const k=s.match(r);return k?+k[1]:d};
+ const SL={};for(const k of s.matchAll(/(?<![A-Z])([A-Z])([A-Z])\s*=\s*([\d.]+)/g))SL[[k[1],k[2]].sort().join('')]=+k[3];
+ const tn=((s.match(/(?:三角形|△)\s*([A-Z]{3})/)||[])[1])||[...new Set(Object.keys(SL).join(''))].sort().join('');
+ if(tn.length==3&&![...tn].some(c=>pts[c]||c==mv)){const[n0,n1,n2]=[...tn],sk=(x,y)=>SL[[x,y].sort().join('')],c=sk(n0,n1),b=sk(n0,n2),a=sk(n1,n2);
+  if(c&&b&&a){const co=(b*b+c*c-a*a)/(2*b*c);if(Math.abs(co)>=1)throw Error('这三条边长构不成三角形');pts[n0]=[0,0];pts[n1]=[c,0];pts[n2]=[b*co,b*Math.sqrt(1-co*co)];[...tn].forEach(q=>used.add(q))}}
+ // 反射辅助函数：点C关于直线AB的对称点
+ const reflect=(C,A,B)=>{const dx=B[0]-A[0],dy=B[1]-A[1],l2=dx*dx+dy*dy||1e-12;
+  const t=((C[0]-A[0])*dx+(C[1]-A[1])*dy)/l2,px=A[0]+t*dx,py=A[1]+t*dy;
+  return[2*px-C[0],2*py-C[1]]};
+ // 点对称：关于点M
+ const pointReflect=(C,M)=>[2*M[0]-C[0],2*M[1]-C[1]];
+ const dfs=[];
+ for(const k of s.matchAll(/([A-Z])([A-Z])\s*⊥\s*([A-Z])([A-Z])\s*(?:于|,?\s*垂足\s*(?:为|是)?)\s*([A-Z])/g))dfs.push({i:k.index,t:'f',k});
+ for(const k of s.matchAll(/([A-Z])\s*(?:为|是)\s*(?:线段)?\s*([A-Z])([A-Z])\s*的?\s*中点/g))dfs.push({i:k.index,t:'m',k});
+ // 对称点 / 折叠（关于直线或点）
+ for(const k of s.matchAll(/([A-Z])\s*(?:为|是)\s*([A-Z])\s*关于\s*(?:直线)?\s*([A-Z])([A-Z])\s*的?\s*(?:对称点|对称|折叠)/g))dfs.push({i:k.index,t:'r',k});
+ for(const k of s.matchAll(/([A-Z])\s*(?:为|是)\s*([A-Z])\s*关于\s*点?\s*([A-Z])\s*的?\s*(?:对称点|对称|中心对称)/g))dfs.push({i:k.index,t:'pr',k});
+ // 折叠后得到 / 对称得到 的写法
+ for(const k of s.matchAll(/(?:把|将)\s*([A-Z])\s*(?:沿|关于)\s*(?:直线)?\s*([A-Z])([A-Z])\s*(?:折叠|对称)\s*(?:得到|到|为)\s*([A-Z])/g))dfs.push({i:k.index,t:'r2',k});
+ for(const k of s.matchAll(/([A-Z])\s*(?:是|为)\s*([A-Z])\s*的?\s*(?:对称点|像)/g)){ // 简单“Q是P的对称点”需上下文，暂忽略或结合前面
+ }
+ dfs.sort((x,y)=>x.i-y.i).forEach(({t,k})=>{
+  if(t=='m'){const a=k[2],b=k[3];[a,b].forEach(need);der.push({n:k[1],links:[[a,b]],f:e=>[(e[a][0]+e[b][0])/2,(e[a][1]+e[b][1])/2]})}
+  else if(t=='f'){const q=k[5],pp=k[1]==q?k[2]:k[1],a=k[3],b=k[4];[pp,a,b].forEach(need);
+   der.push({n:q,links:[[pp,q]],f:e=>{const A=e[a],B=e[b],dx=B[0]-A[0],dy=B[1]-A[1],u=((e[pp][0]-A[0])*dx+(e[pp][1]-A[1])*dy)/(dx*dx+dy*dy||1e-12);return[A[0]+u*dx,A[1]+u*dy]}})}
+  else if(t=='r'){const q=k[1],src=k[2],a=k[3],b=k[4];[src,a,b].forEach(need);
+   der.push({n:q,links:[[src,q],[a,b]],f:e=>reflect(e[src],e[a],e[b])})}
+  else if(t=='pr'){const q=k[1],src=k[2],m=k[3];[src,m].forEach(need);
+   der.push({n:q,links:[[src,q]],f:e=>pointReflect(e[src],e[m])})}
+  else if(t=='r2'){const src=k[1],a=k[2],b=k[3],q=k[4];[src,a,b].forEach(need);
+   der.push({n:q,links:[[src,q],[a,b]],f:e=>reflect(e[src],e[a],e[b])})}
+ });
+ // 多动点：若存在第二个独立动点，暂支持“与主点在同一路径上”的情况（双参数采样）
+ if(allMv.length>1){
+  const candidates=allMv.filter(c=>c!==mv&&!pts[c]&&!der.some(d=>d.n===c));
+  if(candidates.length){
+   mv2=candidates[0];
+  }
+ }
+ // ---- 特殊：正方形/矩形边上多动点 + 等长约束（如 BE=CF）→ 单参数 ----
+ let constrained=null; // {tMin,tMax, posE, posF, ...}
+ const sidePts=[]; // {name, side:[A,B], from}
+ for(const k of s.matchAll(/(?:点)?([A-Z])\s*(?:在|位于)\s*(?:边)?\s*([A-Z])([A-Z])\s*(?:上|边)/g)){
+  sidePts.push({n:k[1], side:[k[2],k[3]]});
+ }
+ // 也匹配 “E在BC上，F在CD上”
+ for(const k of s.matchAll(/([A-Z])\s*在\s*([A-Z])([A-Z])\s*上/g)){
+  if(!sidePts.some(p=>p.n===k[1])) sidePts.push({n:k[1], side:[k[2],k[3]]});
+ }
+ // 等长约束 BE=CF 或 BE=CF=t
+ const eqCons=[];
+ for(const k of s.matchAll(/(?<![A-Z])([A-Z]{2})\s*=\s*([A-Z]{2})(?![A-Z])/g)){
+  eqCons.push([k[1],k[2]]);
+ }
+ // 正方形自动坐标
+ let sqName=null, sideLen=4;
+ const sqm=s.match(/(正方形|矩形|长方形)\s*([A-Z]{4})/);
+ if(sqm){
+  sqName=sqm[2];
+  const a=num(/边长\s*(?:为|=)?\s*([\d.]+)/,4);
+  sideLen=a;
+  if(![...sqName].every(c=>pts[c])){
+   const [A,B,C,D]=[...sqName];
+   pts[A]=pts[A]||[0,0]; pts[B]=pts[B]||[sideLen,0]; pts[C]=pts[C]||[sideLen,sideLen]; pts[D]=pts[D]||[0,sideLen];
+   [...sqName].forEach(c=>used.add(c));
+  }
+ }
+ // 若有两个边上点 + 一个等长约束，且涉及正方形，则单参数化
+ if(sidePts.length>=2 && eqCons.length>=1 && sqName){
+  const eInfo=sidePts[0], fInfo=sidePts[1];
+  const [cons1,cons2]=eqCons[0]; // e.g. BE, CF
+  // 确定参数 t = BE = CF，范围 0~sideLen
+  // 假设标准正方形 A B C D 逆时针
+  const verts=[...sqName];
+  const getPos=(from,to,t)=>{ // 从 from 沿边到 to 走距离 t
+   const A=pts[from],B=pts[to];
+   const len=ds(A,B)||sideLen;
+   const r=Math.min(Math.max(t/len,0),1);
+   return [A[0]+(B[0]-A[0])*r, A[1]+(B[1]-A[1])*r];
+  };
+  // 解析 BE：B到E，E在BC上 → t=BE，E从B沿BC
+  // CF：C到F，F在CD上 → t=CF，F从C沿CD
+  constrained={tMin:0,tMax:sideLen, eName:eInfo.n, fName:fInfo.n,
+   posE:t=>getPos(eInfo.side[0],eInfo.side[1], /B/.test(cons1)?t: (sideLen-t) ), // 简化：根据约束起点
+   posF:t=>getPos(fInfo.side[0],fInfo.side[1], /C/.test(cons2)?t: (sideLen-t) )};
+  // 更精确：根据约束字母确定方向
+  const resolve=(cons,ptInfo)=>{
+   // cons like "BE"，ptInfo.side = ["B","C"]，则从B出发
+   const start=cons[0], end=cons[1];
+   if(ptInfo.side[0]===start) return t=>getPos(ptInfo.side[0],ptInfo.side[1],t);
+   if(ptInfo.side[1]===start) return t=>getPos(ptInfo.side[1],ptInfo.side[0],t);
+   // 若约束是另一端
+   return t=>getPos(ptInfo.side[0],ptInfo.side[1],t);
+  };
+  constrained.posE=resolve(cons1,eInfo);
+  constrained.posF=resolve(cons2,fInfo);
+  // 主运动点设为第一个，路径用参数 t 采样
+  mv=eInfo.n; mv2=fInfo.n;
+  // 后面会用 constrained 生成 path
+ }
+ let lines,closed=false,desc,F;
+ const T=['t'],cl=s.split(/[,;。\n]/),loop=(f,a,b)=>{const l=Array.from({length:2001},(_,i)=>f(a+(b-a)*i/2000));closed=ds(l[0],l[2000])<1e-6;if(closed)l.pop();return[l]};
+ let pm=[...s.matchAll(/(三角形|△|正方形|矩形|长方形|[四五六]边形|多边形)\s*([A-Z]*)/g)].find(k=>!k[2].includes(mv)&&!/^\s*的?面积/.test(s.slice(k.index+k[0].length)));
+ const sg=s.match(/线段\s*([A-Z])([A-Z])(?!\s*的?\s*中点)|在\s*([A-Z])([A-Z])\s*(?:边|上)|边\s*([A-Z])([A-Z])\s*上/),sn=sg&&[sg[1]||sg[3]||sg[5],sg[2]||sg[4]||sg[6]],segOK=sn&&!sn.includes(mv)&&pts[sn[0]]&&pts[sn[1]];
+ if(m=s.match(/x\s*=\s*([^,;。]+?)\s*[,;]\s*y\s*=\s*([^,;。]+)/)){
+  const fx=C(m[1],T),fy=C(m[2],T),r=rg(s,'t')||[0,2*Math.PI];
+  lines=loop(t=>[fx(t),fy(t)],r[0],r[1]);desc='参数曲线 x='+m[1]+'，y='+m[2]}
+ else if((m=s.match(/(?:^|[^a-z])[ρr]\s*=\s*([^,;。]+)/))&&(()=>{try{const f=C(m[1],T);return f(1)!=f(2)}catch(e){return 0}})()){
+  const f=C(m[1],T),r=rg(s,'t')||[0,2*Math.PI];
+  lines=loop(t=>[f(t)*Math.cos(t),f(t)*Math.sin(t)],r[0],r[1]);desc='极坐标曲线 r='+m[1]}
+ else if(pm&&!segOK){let n=pm[2],k=pm[1];const tri=/三角形|△/.test(k);if(!n)n=tri?'ABC':'ABCD';
+  if(![...n].every(c=>pts[c])){const a=num(/边长\s*(?:为|=)?\s*([\d.]+)/,4),l=num(/长\s*(?:为|=)?\s*([\d.]+)/,6),w=num(/宽\s*(?:为|=)?\s*([\d.]+)/,3);
+   const V=tri?[[0,0],[6,0],[2,4]]:/正方形/.test(k)?[[0,0],[a,0],[a,a],[0,a]]:/矩形|长方形/.test(k)?[[0,0],[l,0],[l,w],[0,w]]:[];
+   if(V.length!=n.length)throw Error('请给出'+k+n+'各顶点坐标，如 A(0,0)');[...n].forEach((c,i)=>pts[c]=pts[c]||V[i])}
+  lines=[[...n].map(c=>(used.add(c),pts[c]))];closed=true;desc=k+n+'的边界'}
+ else if(segOK){lines=[[pts[sn[0]],pts[sn[1]]]];sn.forEach(c=>used.add(c));desc='线段'+sn.join('')+'（往返运动）'}
+ else{
+  let eq;for(const c of cl){if(/求|最大|最小|最值|范围|(^|[^a-z])z\s*=/.test(c))continue;
+   let q=(c.match(/[0-9a-z.+\-*\/^()\s]+=[0-9a-z.+\-*\/^()\s]+/)||[''])[0];
+   while((q.match(/\(/g)||[]).length>(q.match(/\)/g)||[]).length)q=q.slice(0,q.lastIndexOf('('));
+   if(q&&/[xy]/.test(q.replace(FR,''))){eq=q.trim();break}}
+  if(eq){const[a,b]=eq.split('='),fa=C(a,['x','y']),fb=C(b,['x','y']);F=(x,y)=>fa(x,y)-fb(x,y);
+   const ext=Math.max(10,...Object.values(pts).flat().map(Math.abs))*1.4;
+   let D=30;lines=implicit(F,D,600);
+   if(lines.some(l=>l.some(p=>Math.abs(p[0])>D*.97||Math.abs(p[1])>D*.97))){D=ext;lines=implicit(F,D,500)}
+   closed=lines.length==1&&ds(lines[0][0],lines[0][lines[0].length-1])<1e-6;
+   const rx=rg(s,'x'),ry=rg(s,'y');if(rx||ry){lines=clip(lines,p=>(!rx||p[0]>=rx[0]-1e-9&&p[0]<=rx[1]+1e-9)&&(!ry||p[1]>=ry[0]-1e-9&&p[1]<=ry[1]+1e-9));closed=false}
+   desc='曲线 '+eq}
+  else if(/圆/.test(s)){
+   const cn=(s.match(/以\s*([A-Z])\s*为圆心/)||s.match(/圆心\s*([A-Z])/)||[])[1],c=cn&&pts[cn]||[0,0];if(cn)used.add(cn);
+   const rm=s.match(/半径\s*(?:为|=|r\s*=)*\s*([0-9a-z.+\-*\/^() ]+?)(?:[^0-9a-z.+\-*\/^() ]|$)/);if(!rm)throw Error('请给出圆的半径，例如“半径为3”或圆的方程 x²+y²=9');
+   const r=C(rm[1])();lines=loop(t=>[c[0]+r*Math.cos(t),c[1]+r*Math.sin(t)],0,2*Math.PI);desc='圆（圆心('+f3(c[0])+','+f3(c[1])+')，半径'+f3(r)+'）'}
+  else throw Error('没有识别出点'+mv+'运动的图形。可写：圆、椭圆/抛物线方程、线段AB、三角形ABC、正方形、参数方程 x=…,y=…、极坐标 r=…。也支持中点、垂足、关于直线/点的对称点（折叠）')}
+ // 若有约束多动点，用单参数 t 生成主点路径，副点作为派生
+ if(constrained){
+  const {tMin,tMax,posE,posF,eName,fName}=constrained;
+  const N=400;
+  const ts=Array.from({length:N+1},(_,i)=>tMin+(tMax-tMin)*i/N);
+  lines=[ts.map(t=>posE(t))];
+  closed=false;
+  desc=`正方形边上动点（${eName}、${fName}，BE=CF）`;
+  // 预计算副点轨迹，派生函数用最近邻或参数比例
+  const fTrail=ts.map(t=>posF(t));
+  der.push({n:fName, links:[[eName,fName]], f:e=>{
+   // 用主点在路径上的弧长比例近似 t
+   const p=e[eName];
+   let best=0,bd=1e9;
+   for(let i=0;i<lines[0].length;i++){
+    const d=ds(p,lines[0][i]);
+    if(d<bd){bd=d;best=i}
+   }
+   return fTrail[best];
+  }, tr:1, trail:null});
+  mv=eName; mv2=null; // 单参数 + 派生
+ }
+ if(!lines||!lines.length)throw Error('没有在可视范围内找到该曲线');
+ const path=build(lines,closed);
+ if(F)path.pts.forEach(q=>{const r=proj(F,[q.x,q.y]);q.x=r[0];q.y=r[1]});
+ let cn=(pm&&pm[2])||tn;
+ if(constrained&&sqName)cn=sqName;
+ const ctx=cn&&cn.length>=3&&[...cn].every(c=>pts[c])?[...cn].map(c=>pts[c]):null;
+ // 目标量（更稳健的识别）
+ const os=s.includes('求')?s.slice(s.lastIndexOf('求')):s;
+ let ob;
+ // 1. 三角形面积
+ const am=[...os.matchAll(/(?:△|三角形)\s*([A-Z]{3})/g)].find(k=>[...k[1]].some(dyn)&&(/面积/.test(os)||/S\s*△/.test(os)||/S_/.test(os)));
+ if(am){const n=[...am[1]];n.forEach(need);
+  ob={name:'△'+am[1]+'的面积',links:[[n[0],n[1]],[n[1],n[2]],[n[2],n[0]]],f:(p,p2)=>{const e=env(p,p2),[a,b,c]=n.map(q=>e[q]);return Math.abs((b[0]-a[0])*(c[1]-a[1])-(c[0]-a[0])*(b[1]-a[1]))/2}}}
+ // 2. 点到直线距离（P到AB的距离）
+ if(!ob){const dm=os.match(/(?:点)?([A-Z])\s*到\s*(?:直线|边)?\s*([A-Z])([A-Z])\s*的?\s*距离/)||os.match(/([A-Z])\s*到\s*([A-Z])([A-Z])\s*的?\s*(?:垂|距)/);
+  if(dm&&(dyn(dm[1])||[...dm[2]+dm[3]].some(dyn))){const pt=dm[1],a=dm[2],b=dm[3];[pt,a,b].forEach(need);
+   ob={name:pt+'到'+a+b+'的距离',links:[[pt,a],[a,b]],f:(p,p2)=>{const e=env(p,p2),P=e[pt],A=e[a],B=e[b],dx=B[0]-A[0],dy=B[1]-A[1],l=Math.hypot(dx,dy)||1e-12;
+    return Math.abs((P[0]-A[0])*dy-(P[1]-A[1])*dx)/l}}}}
+ // 3. 线段长度表达式（PA、PA+PB、PA² 等）——双动点时常用 PQ
+ if(!ob){const tk=[...os.matchAll(/(?<![A-Z])([A-Z]{2})(?![A-Z])/g)].filter(k=>[...k[1]].some(dyn)&&k[1][0]!=k[1][1]);
+  if(tk.length){
+   const mk=(a,b)=>{const rest=os.slice(b).match(/^\|?(\^[\d.]+)?/);b+=rest[0].length;while(a>0&&/[\d.*+\-\/]/.test(os[a-1]))a--;
+    const sub=os.slice(a,b).replace(/\|/g,''),ts=[],ex=sub.replace(/(?<![A-Z])[A-Z]{2}(?![A-Z])/g,w=>{let i=ts.indexOf(w);if(i<0)i=ts.push(w)-1;return'uvw'[i]});
+    return{sub,ts,fn:C(ex,['u','v','w'])}};
+   let r;try{r=mk(tk[0].index,tk[tk.length-1].index+2)}catch(e){r=mk(tk[0].index,tk[0].index+2)}
+   r.ts.forEach(w=>[...w].forEach(need));
+   ob={name:r.sub.trim(),links:r.ts.map(w=>[w[0],w[1]]),f:(p,p2)=>{const e=env(p,p2);return r.fn(...r.ts.map(w=>ds(e[w[0]],e[w[1]])))}}}}
+ // 4. 显式 z= 或 求表达式
+ if(!ob){const gm=s.match(/(?:^|[^a-z])z\s*=\s*([0-9a-z.+\-*\/^()\s]+)/)||s.match(/求\s*([0-9a-z.+\-*\/^()\s]+?)\s*的?\s*(?:最大|最小|最值|范围)/)||s.match(/求\s*([0-9a-z.+\-*\/^()\s]+)/);
+  if(gm&&/[xy]/.test(gm[1].replace(FR,''))){const fn=C(gm[1],['x','y']);ob={name:gm[1].trim(),links:[],f:(p,p2)=>fn(p[0],p[1])}}}
+ // 5. 兜底：到固定点的距离，或纵坐标
+ let note='';
+ if(!ob){const fr=Object.keys(pts).filter(n=>!used.has(n));
+  if(fr.length){const n=fr[0];ob={name:mv+n,links:[[mv,n]],f:(p,p2)=>ds(p,pts[n])}}
+  else{ob={name:'纵坐标 y',links:[],f:(p,p2)=>p[1]};note='没有指定求值目标，默认标出纵坐标的最大、最小点。想看别的，可加一句“求PA的最值”或“求x+y的最值”或“求P到AB的距离”。'}}
+ if(mv2)note=(note?note+' ':'')+'已启用双动点模式：'+mv+'与'+mv2+'在同一路径上独立运动，最值通过网格采样得到。';
+ // 轨迹显示：目标相关派生点优先，否则全部显示
+ const hit=der.filter(d=>ob.name.includes(d.n));(hit.length?hit:der).forEach(d=>d.tr=1);
+ der.filter(d=>d.tr).forEach(d=>d.trail=path.pts.map(q=>({p:env([q.x,q.y])[d.n],b:q.b})));
+ // 最值（支持单参数或双参数）
+ const P=path.pts,n=P.length;
+ function atLocal(uu){const t=uu*path.L;let lo=0,hi=n-1;while(lo<hi){const m=(lo+hi+1)>>1;if(P[m].s<=t)lo=m;else hi=m-1}
+  const a=P[lo],nx=lo+1<n,b=nx?P[lo+1]:path.closed?P[0]:a,d=(nx?P[lo+1].s:path.L)-a.s,k=d>1e-12&&!b.b?(t-a.s)/d:0;
+  return[a.x+(b.x-a.x)*k,a.y+(b.y-a.y)*k]}
+ let ex,mx,mn;
+ if(mv2){
+  // 双动点：网格采样（约 80×80）
+  const N=80;let bestMx=-Infinity,bestMn=Infinity,mxPos=null,mnPos=null;
+  for(let i=0;i<=N;i++){
+   const p1=atLocal(i/N);
+   for(let j=0;j<=N;j++){
+    const p2=atLocal(j/N);
+    const v=ob.f(p1,p2);
+    if(!isFinite(v))continue;
+    if(v>bestMx){bestMx=v;mxPos={u1:i/N,u2:j/N,p1,p2,v}}
+    if(v<bestMn){bestMn=v;mnPos={u1:i/N,u2:j/N,p1,p2,v}}
+   }
+  }
+  if(!mxPos)throw Error('目标量无法计算（双动点）');
+  mx=bestMx;mn=bestMn;
+  ex={mx:[mxPos],mn:[mnPos],dual:true};
+ }else{
+  const vals=P.map(q=>ob.f([q.x,q.y])).map(v=>isFinite(v)?v:NaN),ok=vals.filter(v=>!isNaN(v));
+  if(!ok.length)throw Error('目标量无法计算');
+  mx=Math.max(...ok);mn=Math.min(...ok);
+  const eps=1e-7*(1+Math.max(Math.abs(mx),Math.abs(mn)));
+  const pick=(t,sg)=>{const r=[];if(mx-mn<eps*10)return r;
+   for(let i=0;i<n;i++){const v=vals[i]*sg;if(v<t*sg-eps)continue;const a=vals[(i+n-1)%n]*sg,b=vals[(i+1)%n]*sg;
+    if((path.closed||i>0)&&v<a-1e-12||(path.closed||i<n-1)&&v<b-1e-12)continue;
+    if(r.every(j=>Math.abs(P[j].s-P[i].s)>path.L*.03&&(!path.closed||path.L-Math.abs(P[j].s-P[i].s)>path.L*.03))&&r.length<4)r.push(i)}return r};
+  ex={mx:pick(mx,1),mn:pick(mn,-1),vals};
+ }
+ return{pts,mv,mv2,path,ob,der,desc,note,ex,mx,mn,G,ctx}}
+// ---- 视图与绘制 ----
+let S=null,W=0,H=0,dpr=1,V={sc:40,ox:0,oy:0},u=0,u2=0,dir=1,play=true,last=0;
+const X=x=>W/2+V.ox+x*V.sc,Y=y=>H/2+V.oy-y*V.sc,col=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+function fit(){const xs=[],ys=[];S.path.pts.forEach(p=>{xs.push(p.x);ys.push(p.y)});Object.values(S.pts).forEach(p=>{xs.push(p[0]);ys.push(p[1])});
+ // 也考虑派生点轨迹，避免对称点跑出视野
+ (S.der||[]).forEach(d=>{(d.trail||[]).forEach(q=>{if(q.p){xs.push(q.p[0]);ys.push(q.p[1])}})});
+ const x0=Math.min(...xs),x1=Math.max(...xs),y0=Math.min(...ys),y1=Math.max(...ys);
+ V.sc=Math.min(W/Math.max((x1-x0)*1.4,1),H/Math.max((y1-y0)*1.4,1));V.ox=-(x0+x1)/2*V.sc;V.oy=(y0+y1)/2*V.sc}
+function at(uu){const P=S.path.pts,n=P.length,t=uu*S.path.L;let lo=0,hi=n-1;while(lo<hi){const m=(lo+hi+1)>>1;if(P[m].s<=t)lo=m;else hi=m-1}
+ const a=P[lo],nx=lo+1<n,b=nx?P[lo+1]:S.path.closed?P[0]:a,d=(nx?P[lo+1].s:S.path.L)-a.s,k=d>1e-12&&!b.b?(t-a.s)/d:0;
+ return[a.x+(b.x-a.x)*k,a.y+(b.y-a.y)*k]}
+function draw(){
+ if(!W)return;g.setTransform(dpr,0,0,dpr,0,0);g.clearRect(0,0,W,H);
+ const fg=col('--fg'),mu=col('--mu'),ac=col('--ac'),gr=col('--gr');
+ g.font='12px ui-monospace,Menlo,monospace';
+ const raw=60/V.sc,pw=10**Math.floor(Math.log10(raw)),st=[1,2,5,10].map(m=>m*pw).find(v=>v>=raw);
+ const xa=(-W/2-V.ox)/V.sc,xb=(W/2-V.ox)/V.sc,ya=(V.oy-H/2)/V.sc,yb=(V.oy+H/2)/V.sc;
+ g.lineWidth=1;g.fillStyle=mu;
+ for(let x=Math.ceil(xa/st)*st;x<=xb;x+=st){g.strokeStyle=Math.abs(x)<st/2?mu:gr;g.beginPath();g.moveTo(X(x),0);g.lineTo(X(x),H);g.stroke();if(Math.abs(x)>st/2)g.fillText(f3(x),X(x)+3,Math.min(Math.max(Y(0)+13,13),H-4))}
+ for(let y=Math.ceil(ya/st)*st;y<=yb;y+=st){g.strokeStyle=Math.abs(y)<st/2?mu:gr;g.beginPath();g.moveTo(0,Y(y));g.lineTo(W,Y(y));g.stroke();if(Math.abs(y)>st/2)g.fillText(f3(y),Math.min(Math.max(X(0)+4,2),W-30),Y(y)-3)}
+ if(!S)return;
+ const tr=(arr,gp)=>{g.beginPath();arr.forEach((q,i)=>{const x=gp?X(q.p[0]):X(q.x),y=gp?Y(q.p[1]):Y(q.y);q.b||!i?g.moveTo(x,y):g.lineTo(x,y)});};
+ S.der.filter(d=>d.tr).forEach(d=>{tr(d.trail,1);g.strokeStyle=col('--or');g.lineWidth=2;g.setLineDash([6,4]);g.stroke();g.setLineDash([])});
+ if(S.ctx){g.beginPath();S.ctx.forEach((q,i)=>i?g.lineTo(X(q[0]),Y(q[1])):g.moveTo(X(q[0]),Y(q[1])));g.closePath();g.strokeStyle=mu;g.lineWidth=1.5;g.stroke()}
+ tr(S.path.pts);if(S.path.closed)g.closePath();g.strokeStyle=ac;g.lineWidth=2.5;g.stroke();
+ const p=at(u),p2=S.mv2?at(u2):null,Gp=n=>S.G(n,p,p2);
+ g.strokeStyle=mu;g.lineWidth=1.5;g.setLineDash([5,4]);
+ [...S.ob.links,...S.der.flatMap(d=>d.links)].forEach(([a,b])=>{g.beginPath();g.moveTo(X(Gp(a)[0]),Y(Gp(a)[1]));g.lineTo(X(Gp(b)[0]),Y(Gp(b)[1]));g.stroke()});
+ g.setLineDash([]);
+ g.font='600 14px "PingFang SC",system-ui,sans-serif';
+ const dot=(q,c,r,l)=>{g.fillStyle=c;g.beginPath();g.arc(X(q[0]),Y(q[1]),r,0,7);g.fill();if(l){g.fillStyle=fg;g.fillText(l,X(q[0])+r+3,Y(q[1])-r-2)}};
+ if(S.ex.dual){
+  // 双动点最值标记
+  [['mx','最大','--mx'],['mn','最小','--mn']].forEach(([k,t,c])=>S.ex[k].forEach(pos=>{
+   g.strokeStyle=col(c);g.lineWidth=2.5;
+   g.beginPath();g.arc(X(pos.p1[0]),Y(pos.p1[1]),9,0,7);g.stroke();
+   g.beginPath();g.arc(X(pos.p2[0]),Y(pos.p2[1]),9,0,7);g.stroke();
+   g.fillStyle=col(c);g.fillText(t+' '+f3(pos.v),X(pos.p1[0])+12,Y(pos.p1[1])+5);
+  }));
+ }else{
+  [['mx','最大','--mx'],['mn','最小','--mn']].forEach(([k,t,c])=>S.ex[k].forEach(i=>{const q=S.path.pts[i];g.strokeStyle=col(c);g.lineWidth=2.5;g.beginPath();g.arc(X(q.x),Y(q.y),9,0,7);g.stroke();g.fillStyle=col(c);g.fillText(t+' '+f3(S.ex.vals[i]),X(q.x)+12,Y(q.y)+5)}));
+ }
+ for(const n in S.pts)dot(S.pts[n],fg,4,n);
+ S.der.forEach(d=>dot(Gp(d.n),col('--or'),5,d.n));
+ g.fillStyle=col('--bg');g.beginPath();g.arc(X(p[0]),Y(p[1]),9,0,7);g.fill();dot(p,ac,6,S.mv);
+ if(p2){g.fillStyle=col('--bg');g.beginPath();g.arc(X(p2[0]),Y(p2[1]),9,0,7);g.fill();dot(p2,col('--or'),6,S.mv2)}
+ $('rd').textContent=S.ob.name+' = '+f3(S.ob.f(p,p2))}
+function size(){const r=$('st').getBoundingClientRect();dpr=devicePixelRatio||1;W=r.width;H=r.height;cv.width=W*dpr;cv.height=H*dpr;if(S&&!V.set){fit()}draw()}
+new ResizeObserver(size).observe($('st'));
+// ---- 结果面板 ----
+function report(){
+ const E=S.ex;
+ let rows='';
+ if(E.dual){
+  rows=E.mx.map(pos=>'<button class="x mx" data-u1="'+pos.u1+'" data-u2="'+pos.u2+'">最大值 <b>'+f3(pos.v)+'</b>　'+S.mv+'('+f3(pos.p1[0])+','+f3(pos.p1[1])+') '+S.mv2+'('+f3(pos.p2[0])+','+f3(pos.p2[1])+')</button>').join('')+
+       E.mn.map(pos=>'<button class="x mn" data-u1="'+pos.u1+'" data-u2="'+pos.u2+'">最小值 <b>'+f3(pos.v)+'</b>　'+S.mv+'('+f3(pos.p1[0])+','+f3(pos.p1[1])+') '+S.mv2+'('+f3(pos.p2[0])+','+f3(pos.p2[1])+')</button>').join('');
+ }else{
+  rows=E.mx.map(i=>{const q=S.path.pts[i];return'<button class="x mx" data-u="'+(q.s/S.path.L)+'">最大值 <b>'+f3(E.vals[i])+'</b>　'+S.mv+'('+f3(q.x)+', '+f3(q.y)+')</button>'}).join('')+
+       E.mn.map(i=>{const q=S.path.pts[i];return'<button class="x mn" data-u="'+(q.s/S.path.L)+'">最小值 <b>'+f3(E.vals[i])+'</b>　'+S.mv+'('+f3(q.x)+', '+f3(q.y)+')</button>'}).join('');
+ }
+ const mode=S.mv2?'点'+esc(S.mv)+'与'+esc(S.mv2)+'沿'+esc(S.desc)+'独立运动（双参数）':'点'+esc(S.mv)+'沿'+esc(S.desc)+'运动';
+ $('rs').innerHTML='<p><span class="k">运动方式　</span>'+mode+'</p><p><span class="k">目标量　</span>'+esc(S.ob.name)+'</p>'+
+  (E.mx.length||E.dual?rows:'<p>该目标量在运动过程中<b>恒为定值 '+f3(S.mx)+'</b>。</p>')+
+  (S.der.some(d=>d.tr)?'<p><span class="k">轨迹　</span>橙色虚线是点'+esc(S.der.filter(d=>d.tr).map(d=>d.n).join('、'))+'的运动轨迹</p>':'')+
+  (S.note?'<p class="k">'+esc(S.note)+'</p>':'')+'<p class="k">点击最值可跳到对应位置；拖动画布平移，滚轮或＋－缩放。</p>'}
+function run(){
+ try{S=parse($('tx').value);V.set=0;fit();u=0;u2=0;dir=1;play=true;$('pl').textContent='⏸';
+  // 显示/隐藏副点滑块
+  const has2=!!S.mv2;$('pr2').style.display=$('lb2').style.display=has2?'':'none';
+  $('pr').value=0;$('pr2').value=0;report();draw()}
+ catch(e){$('rs').innerHTML='<p class="e"><b>'+esc(e.message)+'</b></p><p class="k">试试点上面的示例，看看描述的写法。</p>'}}
+$('go').onclick=run;
+$('rs').onclick=e=>{const b=e.target.closest('[data-u],[data-u1]');if(b){
+  if(b.dataset.u1!==undefined){u=+b.dataset.u1;u2=+b.dataset.u2;$('pr').value=u*1000;$('pr2').value=u2*1000}
+  else{u=+b.dataset.u;$('pr').value=u*1000}
+  play=false;$('pl').textContent='▶';draw()}};
+$('pl').onclick=()=>{play=!play;$('pl').textContent=play?'⏸':'▶'};
+$('pr').oninput=e=>{u=Math.min(e.target.value/1000,.9999);play=false;$('pl').textContent='▶';draw()};
+$('pr2').oninput=e=>{u2=Math.min(e.target.value/1000,.9999);play=false;$('pl').textContent='▶';draw()};
+const EX=[
+ '点P在圆x²+y²=4上运动，A(3,0)，求PA的最大值和最小值',
+ '点P在椭圆x²/9+y²/4=1上运动，A(2,0)，求PA的最值',
+ '点P在线段AB上运动，A(0,0)，B(6,0)，C(2,4)，求PC的最小值',
+ '点P在抛物线y=x²上运动，A(0,3)，M为线段AP的中点，求PA的最小值',
+ 'x=3cosθ，y=2sinθ，求x+y的最大值和最小值',
+ 'r=2(1+cosθ)，求y的最大值',
+ '点P在正方形ABCD的边上运动，边长为4，E(6,2)，求PE的最值',
+ '在三角形ABC中，AB=3，AC=4，BC=5，P为边BC上一动点，PE⊥AB于E，PF⊥AC于F，M为EF的中点，求AM最小值',
+ '点P在圆x²+y²=9上运动，A(0,0)，B(4,0)，Q为P关于直线AB的对称点，求QA的最小值',
+ '点P在线段AB上运动，A(0,0)，B(6,0)，C(3,4)，把P关于AC折叠得到Q，求BQ的最小值',
+ '点P、Q为圆x²+y²=4上的两动点，求PQ的最大值',
+ '正方形ABCD边长为4，点E在边BC上，点F在边CD上，BE=CF，求BF+DE的最小值'
+];
+EX.forEach((t,i)=>{const b=document.createElement('button');b.textContent=['圆上的距离','椭圆上的距离','线段上最短距离','抛物线与中点','参数方程','心形线','正方形边上','垂足与中点','对称点轨迹','折叠对称','双动点PQ','正方形等长约束'][i];b.onclick=()=>{$('tx').value=t;run()};$('ch').append(b)});
+$('tx').value=EX[0];$('tx').placeholder='用一句话描述：点在哪个图形上运动，已知点/中点/垂足/对称点，求什么（距离、面积、表达式等）';
+$('tx').addEventListener('keydown',e=>{if(e.key=='Enter'&&(e.ctrlKey||e.metaKey))run()});
+// 平移、缩放
+let dg=null;const zoom=(k,cx=W/2,cy=H/2)=>{const wx=(cx-W/2-V.ox)/V.sc,wy=(H/2+V.oy-cy)/V.sc;V.sc*=k;V.ox=cx-W/2-wx*V.sc;V.oy=cy-H/2+wy*V.sc;V.set=1;draw()};
+cv.onpointerdown=e=>{dg=[e.clientX,e.clientY];cv.setPointerCapture(e.pointerId);cv.style.cursor='grabbing'};
+cv.onpointermove=e=>{if(!dg)return;V.ox+=e.clientX-dg[0];V.oy+=e.clientY-dg[1];dg=[e.clientX,e.clientY];V.set=1;draw()};
+cv.onpointerup=()=>{dg=null;cv.style.cursor='grab'};
+cv.onwheel=e=>{e.preventDefault();const r=cv.getBoundingClientRect();zoom(e.deltaY<0?1.15:1/1.15,e.clientX-r.left,e.clientY-r.top)};
+$('zi').onclick=()=>zoom(1.3);$('zo').onclick=()=>zoom(1/1.3);$('zf').onclick=()=>{if(S){V.set=0;fit();draw()}};
+// 动画循环（沿弧长匀速；闭合曲线循环，开放曲线往返）
+function loop(t){const dt=Math.min((t-last)/1000,.1);last=t;
+ if(S&&play){u+=dir*dt*$('sp').value/8;if(S.path.closed)u=(u%1+1)%1;else if(u>=1){u=1;dir=-1}else if(u<=0){u=0;dir=1}$('pr').value=u*1000;draw()}
+ requestAnimationFrame(loop)}
+matchMedia('(prefers-color-scheme:dark)').addEventListener('change',draw);
+run();requestAnimationFrame(loop);
+</script></body></html>
